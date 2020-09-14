@@ -3,29 +3,25 @@ set ns [new Simulator]
 #
 # Flow configurations
 #
-set numFlow 100000
-set workload "cachefollower" ;# cachefollower, mining, search, webserver
-set linkLoad 0.6 ;# ranges from 0.0 to 1.0
+
+set workload "conga" ;# cachefollower, mining, search, webserver
+set linkLoad 0.65 ;# ranges from 0.0 to 1.0
 
 #
 # Toplogy configurations
 #
-set linkRate 10 ;# Gb
-set hostDelay 0.000001 ;# secs
-set linkDelayHostTor 0.000004 ;# secs
-set linkDelayTorAggr 0.000004 ;# secs
-set linkDelayAggrCore 0.000004 ;# secs
-set dataBufferHost [expr 1000*1538] ;# bytes / port
-set dataBufferFromTorToAggr [expr 250*1538] ;# bytes / port
-set dataBufferFromAggrToCore [expr 250*1538] ;# bytes / port
-set dataBufferFromCoreToAggr [expr 250*1538] ;# bytes / port
-set dataBufferFromAggrToTor [expr 250*1538] ;# bytes / port
-set dataBufferFromTorToHost [expr 250*1538] ;# bytes / port
+set linkRate 100 ;# Gb
+set hostDelay 0.00 ;# secs
+set linkDelayHostTor 0.000001 ;# secs
+set linkDelayTorAggr 0.000001 ;# secs
+set dataBufferHost [expr 50000*1538] ;# bytes / port
+set dataBufferFromTorToAggr [expr 50000*1538] ;# bytes / port
+set dataBufferFromAggrToTor [expr 50000*1538] ;# bytes / port
+set dataBufferFromTorToHost [expr 50000*1538] ;# bytes / port
 
-set numCore 8 ;# number of core switches
-set numAggr 16 ;# number of aggregator switches
-set numTor 32 ;# number of ToR switches
-set numNode 192 ;# number of nodes
+set numAggr 8 ;# number of aggregator switches
+set numTor 8 ;# number of ToR switches
+set numNode 128 ;# number of nodes
 
 #
 # XPass configurations
@@ -46,11 +42,20 @@ set avgCreditSize [expr ($minCreditSize+$maxCreditSize)/2.0]
 set creditBW [expr $linkRate*125000000*$avgCreditSize/($avgCreditSize+$maxEthernetSize)]
 set creditBW [expr int($creditBW)]
 
+
 #
 # Simulation setup
 #
-set simStartTime 0.1
-set simEndTime 60
+set simStartTime 1.0
+set simEndTime 1.05
+
+#Incast Config
+set createIncast 1
+set fanIn 100
+set IncastSize 200000
+#Init config params
+set numIncasts [expr int(($simEndTime-$simStartTime)*64*$linkRate*1000000000.0*0.05/($fanIn*$IncastSize*8.0))]
+set IncastGap [expr double(($simEndTime-$simStartTime)/$numIncasts)]
 
 # Output file
 file mkdir "outputs"
@@ -112,15 +117,22 @@ if {[string compare $workload "mining"] == 0} {
 } elseif {[string compare $workload "webserver"] == 0} {
   set workloadPath "workloads/workload_webserver.tcl"
   set avgFlowSize 63735
+} elseif {[string compare $workload "conga"] == 0} {
+  set workloadPath "workloads/conga.tcl"
+  set avgFlowSize 216304
 } else {
   puts "Invalid workload: $workload"
   exit 0
 }
 
+if {$createIncast} {
+  set linkLoad [expr $linkLoad-0.05]
+}
 set overSubscRatio [expr double($numNode/$numTor)/double($numTor/$numAggr)]
-set lambda [expr ($numNode*$linkRate*1000000000*$linkLoad)/($avgFlowSize*8.0/$maxPayload*$maxEthernetSize)]
-set avgFlowInterval [expr $overSubscRatio/$lambda]
-
+set lambda [expr ($numNode*$linkRate*1000000000*$linkLoad)/($avgFlowSize*8.0)]
+set avgFlowInterval [expr 2.0/$lambda]
+set numFlow [expr int(($simEndTime-$simStartTime)*1.0/$avgFlowInterval)]
+puts "NumFlow $numFlow"
 # Random number generators
 set RNGFlowSize [new RNG]
 $RNGFlowSize seed 61569011
@@ -139,9 +151,14 @@ $randomFlowSize use-rng $RNGFlowSize
 $randomFlowSize set interpolation_ 2
 $randomFlowSize loadCDF $workloadPath
 
+set stddev [expr $avgFlowInterval/2.0]
+#set meanLn [expr ((log($avgFlowInterval)/2.303)-($sigma*$sigma/2.0))]
+#puts "MeanLn $meanLn"
+
 set randomFlowInterval [new RandomVariable/Exponential]
 $randomFlowInterval use-rng $RNGFlowInterval
 $randomFlowInterval set avg_ $avgFlowInterval
+#$randomFlowInterval set std_ $stddev
 
 set randomSrcNodeId [new RandomVariable/Uniform]
 $randomSrcNodeId use-rng $RNGSrcNodeId
@@ -167,31 +184,13 @@ for {set i 0} {$i < $numAggr} {incr i} {
   set dcAggr($i) [$ns node]
   $dcAggr($i) set nodetype_ 3
 }
-for {set i 0} {$i < $numCore} {incr i} {
-  set dcCore($i) [$ns node]
-  $dcCore($i) set nodetype_ 4
-}
 
 # Link
 puts "Creating links..."
-for {set i 0} {$i < $numAggr} {incr i} {
-  set coreIndex [expr $i%2]
-  for {set j $coreIndex} {$j < $numCore} {incr j 2} {
-    $ns simplex-link $dcAggr($i) $dcCore($j) [set linkRate]Gb $linkDelayAggrCore XPassDropTail
-    set link_aggr_core [$ns link $dcAggr($i) $dcCore($j)]
-    set queue_aggr_core [$link_aggr_core queue]
-    $queue_aggr_core set data_limit_ $dataBufferFromAggrToCore
-
-    $ns simplex-link $dcCore($j) $dcAggr($i) [set linkRate]Gb $linkDelayAggrCore XPassDropTail
-    set link_core_aggr [$ns link $dcCore($j) $dcAggr($i)]
-    set queue_core_aggr [$link_core_aggr queue]
-    $queue_core_aggr set data_limit_ $dataBufferFromCoreToAggr
-  }
-}
 
 for {set i 0} {$i < $numTor} {incr i} {
   set aggrIndex [expr $i/4*2]
-  for {set j $aggrIndex} {$j <= $aggrIndex+1} {incr j} {
+  for {set j 0} {$j < $numAggr} {incr j} {
     $ns simplex-link $dcTor($i) $dcAggr($j) [set linkRate]Gb $linkDelayTorAggr XPassDropTail
     set link_tor_aggr [$ns link $dcTor($i) $dcAggr($j)]
     set queue_tor_aggr [$link_tor_aggr queue]
@@ -206,7 +205,7 @@ for {set i 0} {$i < $numTor} {incr i} {
 
 for {set i 0} {$i < $numNode} {incr i} {
   set torIndex [expr $i/($numNode/$numTor)]
-
+  puts "torIndex $torIndex"
   $ns simplex-link $dcNode($i) $dcTor($torIndex) [set linkRate]Gb [expr $linkDelayHostTor+$hostDelay] XPassDropTail
   set link_host_tor [$ns link $dcNode($i) $dcTor($torIndex)]
   set queue_host_tor [$link_host_tor queue]
@@ -248,11 +247,63 @@ for {set i 0} {$i < $numFlow} {incr i} {
   set dstIndex($i) $dst_nodeid
 }
 
+if {$createIncast} {
+puts "Creating Incasts"
+for {set j 0} {$j < $numIncasts} {incr j} {
+  #set src_nodeid [expr int([$randomSrcNodeId value])]
+  set dst_nodeid [expr int([$randomDstNodeId value])]
+	for {set k 0} {$k < $fanIn} {incr k} {
+		set src_nodeid [expr int([$randomSrcNodeId value])]
+  while {$src_nodeid == $dst_nodeid} {
+   set src_nodeid [expr int([$randomSrcNodeId value])]
+  #  set dst_nodeid [expr int([$randomDstNodeId value])]
+  }
+
+  set i [expr $numFlow + [expr $k + [expr $j * $fanIn]]]
+  set sender($i) [new Agent/XPass]
+  set receiver($i) [new Agent/XPass]
+  $sender($i) set fid_ $i
+  $sender($i) set host_id_ $src_nodeid
+  $receiver($i) set fid_ $i
+  $receiver($i) set host_id_ $dst_nodeid
+
+  $ns attach-agent $dcNode($src_nodeid) $sender($i)
+  $ns attach-agent $dcNode($dst_nodeid) $receiver($i)
+
+  $ns connect $sender($i) $receiver($i)
+
+  $ns at $simEndTime "$sender($i) close"
+  $ns at $simEndTime "$receiver($i) close"
+
+  set srcIndex($i) $src_nodeid
+  set dstIndex($i) $dst_nodeid
+}
+}
+}
 set nextTime $simStartTime
 set fidx 0
 
+set fincastid $numFlow
+set nextIncast [expr $nextTime+$IncastGap]
+
 proc sendBytes {} {
-  global ns random_flow_size nextTime sender fidx randomFlowSize randomFlowInterval numFlow srcIndex dstIndex flowfile
+  global ns random_flow_size nextTime sender fidx randomFlowSize randomFlowInterval numFlow srcIndex dstIndex flowfile fincastid IncastSize IncastGap numIncasts nextIncast fanIn createIncast simEndTime
+ if {$nextTime < $simEndTime} {
+  if {$createIncast} {
+  if {$nextTime > $nextIncast} {
+	  if {$fincastid < [expr $numFlow + ($numIncasts * $fanIn)]} {
+		for {set k 0} {$k < $fanIn} {incr k} {
+			if {$fincastid < [expr $numFlow + ($numIncasts * $fanIn)]} {
+  puts $flowfile "$nextTime $srcIndex($fincastid) $dstIndex($fincastid) $IncastSize $fincastid"
+  $ns at $nextTime "$sender($fincastid) advance-bytes $IncastSize"
+			set fincastid [expr $fincastid+1]
+	}
+	}
+	set nextIncast [expr $nextTime+$IncastGap]
+	}
+	}
+}
+
   while {1} {
     set fsize [expr ceil([expr [$randomFlowSize value]])]
     if {$fsize > 0} {
@@ -260,7 +311,7 @@ proc sendBytes {} {
     }
   }
 
-  puts $flowfile "$nextTime $srcIndex($fidx) $dstIndex($fidx) $fsize"
+  puts $flowfile "$nextTime $srcIndex($fidx) $dstIndex($fidx) $fsize $fidx"
   $ns at $nextTime "$sender($fidx) advance-bytes $fsize"
 
   set nextTime [expr $nextTime+[$randomFlowInterval value]]
@@ -270,8 +321,9 @@ proc sendBytes {} {
     $ns at $nextTime "sendBytes"
   }
 }
+}
 
 $ns at 0.0 "puts \"Simulation starts!\""
 $ns at $nextTime "sendBytes"
-$ns at [expr $simEndTime+1] "finish"
+$ns at [expr $simEndTime+0.01] "finish"
 $ns run
