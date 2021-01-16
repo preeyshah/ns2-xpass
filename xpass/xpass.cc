@@ -281,7 +281,7 @@ void XPassAgent::recv_nack(Packet *pkt) {
 }
 
 void XPassAgent::recv_credit_stop(Packet *pkt) {
-  fct_ = now() - fst_;
+  fct_ = now();
   fct_timer_.sched(default_credit_stop_timeout_);
   send_credit_timer_.force_cancel();
   credit_send_state_ = XPASS_SEND_CLOSE_WAIT;

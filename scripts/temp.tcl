@@ -50,7 +50,7 @@ set simStartTime 1.0
 set simEndTime 1.05
 
 #Incast Config
-set createIncast 0
+set createIncast 1
 set fanIn 100
 set IncastSize 200000
 #Init config params
